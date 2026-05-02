@@ -1,0 +1,778 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Eval Viewer</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #f5f5f8;
+    --surface: #ffffff;
+    --surface2: #eeeef3;
+    --border: #dddde8;
+    --border2: #c8c8d8;
+    --text: #18182a;
+    --text-muted: #52526e;
+    --text-dim: #9898b8;
+    --done: #16a34a;
+    --done-bg: #dcfce7;
+    --done-border: #86efac;
+    --review: #b45309;
+    --review-bg: #fef3c7;
+    --review-border: #fcd34d;
+    --flag: #dc2626;
+    --flag-bg: #fee2e2;
+    --none: #b0b0c8;
+    --accent: #4f46e5;
+    --accent-dim: #e0e7ff;
+    --sidebar-w: 280px;
+    --topbar-h: 52px;
+  }
+
+  html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; }
+
+  #topbar {
+    position: fixed; top: 0; left: 0; right: 0; height: var(--topbar-h);
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 12px; padding: 0 16px; z-index: 100;
+  }
+  #topbar h1 { font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: var(--accent); letter-spacing: .08em; flex-shrink: 0; }
+  #filename { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--text-muted); max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #save-status { font-family: 'IBM Plex Mono', monospace; font-size: 11px; padding: 3px 9px; border-radius: 4px; transition: all .2s; }
+  #save-status.idle   { color: var(--text-dim); }
+  #save-status.saving { color: var(--review); }
+  #save-status.saved  { color: var(--done); }
+  #save-status.error  { color: var(--flag); }
+  #progress-wrap { margin-left: auto; display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+  #progress-text { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--text-muted); }
+  #progress-bar-wrap { width: 120px; height: 4px; background: var(--border); border-radius: 99px; overflow: hidden; }
+  #progress-bar { height: 100%; background: var(--accent); border-radius: 99px; transition: width .3s; }
+  #shortcuts-hint { font-size: 11px; color: var(--text-dim); flex-shrink: 0; }
+
+  #layout { display: flex; position: fixed; top: var(--topbar-h); left: 0; right: 0; bottom: 0; }
+
+  #sidebar {
+    width: var(--sidebar-w); flex-shrink: 0;
+    background: var(--surface); border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  #search-wrap { padding: 10px 12px 8px; border-bottom: 1px solid var(--border); }
+  #search {
+    width: 100%; background: var(--surface2); border: 1px solid var(--border);
+    color: var(--text); padding: 6px 10px; border-radius: 6px; font-size: 12px; font-family: inherit; outline: none;
+  }
+  #search::placeholder { color: var(--text-dim); }
+  #search:focus { border-color: var(--accent); }
+
+  /* FM suggestions (shown while typing if query matches a failure mode) */
+  #fm-suggestions { display: none; margin-top: 6px; }
+  #fm-suggestions-label { font-size: 10px; color: var(--text-dim); font-family: 'IBM Plex Mono', monospace; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 3px; }
+  .fm-suggestion {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 4px 8px; border-radius: 4px; cursor: pointer;
+    font-size: 11px; color: var(--text-muted); background: var(--surface2);
+    margin-bottom: 2px; transition: all .1s; font-family: 'IBM Plex Mono', monospace;
+  }
+  .fm-suggestion:hover { background: var(--accent-dim); color: var(--accent); }
+  .fm-count { font-size: 10px; color: var(--text-dim); flex-shrink: 0; }
+  .fm-suggestion:hover .fm-count { color: var(--accent); }
+
+  /* Active FM chip (shown when a failure mode filter is locked) */
+  #active-fm-chip {
+    display: none; align-items: center; gap: 4px; margin-top: 6px;
+    background: var(--accent-dim); color: var(--accent); border: 1px solid #a5b4fc;
+    border-radius: 4px; padding: 3px 8px; font-size: 11px; font-family: 'IBM Plex Mono', monospace;
+  }
+  #active-fm-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #clear-fm-btn { cursor: pointer; color: #818cf8; font-size: 14px; line-height: 1; flex-shrink: 0; }
+  #clear-fm-btn:hover { color: var(--accent); }
+
+  /* Sidebar item count */
+  #sidebar-count {
+    font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: var(--text-dim);
+    text-align: right; margin-top: 5px;
+  }
+
+  #filter-row { display: flex; gap: 4px; padding: 6px 12px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  .filter-chip {
+    font-size: 11px; padding: 2px 8px; border-radius: 99px; cursor: pointer;
+    border: 1px solid transparent; font-family: 'IBM Plex Mono', monospace;
+    transition: all .15s; color: var(--text-muted); background: var(--surface2);
+  }
+  .filter-chip[data-f="done"]   { background: var(--done-bg);   border-color: var(--done-border); }
+  .filter-chip[data-f="review"] { background: var(--review-bg); border-color: var(--review-border); }
+  .filter-chip[data-f="flag"]   { background: var(--flag-bg);   border-color: #fca5a5; }
+  .filter-chip.active { border-width: 1.5px; color: var(--text); }
+  .filter-chip[data-f="done"].active   { border-color: var(--done); }
+  .filter-chip[data-f="review"].active { border-color: var(--review); }
+  .filter-chip[data-f="flag"].active   { border-color: var(--flag); }
+  .filter-chip[data-f="all"].active    { color: var(--text);       border-color: var(--accent); }
+  .filter-chip[data-f="none"].active   { color: var(--text-muted); border-color: var(--border2); }
+  #sidebar-list { flex: 1; overflow-y: auto; }
+  #sidebar-list::-webkit-scrollbar { width: 4px; }
+  #sidebar-list::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 99px; }
+
+  .sidebar-item { display: flex; align-items: stretch; cursor: pointer; border-bottom: 1px solid var(--border); transition: background .1s; }
+  .sidebar-item .status-bar { width: 3px; flex-shrink: 0; }
+  .sidebar-item .item-inner { padding: 9px 10px; flex: 1; min-width: 0; }
+  .sidebar-item .item-id    { font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: var(--text-dim); margin-bottom: 2px; }
+  .sidebar-item .item-query { font-size: 12px; line-height: 1.4; color: var(--text-muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .sidebar-item.active .item-query { color: var(--text); }
+  .sidebar-item .item-badges { display: flex; gap: 4px; margin-top: 4px; flex-wrap: wrap; }
+  .badge { font-family: 'IBM Plex Mono', monospace; font-size: 9px; padding: 1px 5px; border-radius: 3px; font-weight: 500; }
+
+  .s-done   { background: #f0fdf4; }
+  .s-review { background: #fffbeb; }
+  .s-flag   { background: #fff1f1; }
+  .s-none   { background: var(--surface); }
+
+  .s-done:hover,   .s-done.active   { background: #dcfce7; }
+  .s-review:hover, .s-review.active { background: #fef3c7; }
+  .s-flag:hover,   .s-flag.active   { background: #fee2e2; }
+  .s-none:hover,   .s-none.active   { background: var(--surface2); }
+
+  .s-done   .status-bar { background: var(--done); }
+  .s-review .status-bar { background: var(--review); }
+  .s-flag   .status-bar { background: var(--flag); }
+  .s-none   .status-bar { background: var(--none); }
+
+  .badge.b-done   { background: var(--done-bg);   color: var(--done);   border: 1px solid var(--done-border); }
+  .badge.b-review { background: var(--review-bg); color: var(--review); border: 1px solid var(--review-border); }
+  .badge.b-flag   { background: var(--flag-bg);   color: var(--flag);   border: 1px solid #fca5a5; }
+
+  #main { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+
+  #loading-state, #empty-state {
+    flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    color: var(--text-dim); gap: 12px;
+  }
+  #loading-state .icon, #empty-state .icon { font-size: 36px; }
+  #loading-state p, #empty-state p { font-size: 13px; }
+  #empty-state .hint { font-size: 11px; font-family: 'IBM Plex Mono', monospace; }
+
+  #entry-view { flex: 1; overflow: hidden; display: none; flex-direction: column; }
+
+  #entry-nav {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 20px; border-bottom: 1px solid var(--border);
+    background: var(--surface); flex-shrink: 0;
+  }
+  #entry-id { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--text-dim); }
+  #nav-prev, #nav-next {
+    background: var(--surface2); border: 1px solid var(--border); color: var(--text-muted);
+    padding: 4px 10px; border-radius: 5px; cursor: pointer; font-size: 12px; font-family: inherit; transition: all .15s;
+  }
+  #nav-prev:hover, #nav-next:hover { border-color: var(--accent); color: var(--accent); }
+  #nav-counter { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--text-dim); }
+  #content-split { flex: 1; display: flex; overflow: hidden; }
+
+  #response-panel { flex: 1; overflow-y: auto; padding: 16px 28px 24px; position: relative; }
+  #copy-btn {
+    position: sticky; bottom: 0; float: right; margin-top: 8px;
+    background: var(--surface2); border: 1px solid var(--border); color: var(--text-muted);
+    padding: 4px 10px; border-radius: 5px; cursor: pointer; font-size: 11px;
+    font-family: 'IBM Plex Mono', monospace; transition: all .15s; z-index: 10;
+  }
+  #copy-btn:hover { border-color: var(--accent); color: var(--accent); }
+  #copy-btn.copied { border-color: var(--done); color: var(--done); }
+
+  #query-section { margin-bottom: 20px; padding-bottom: 20px;}
+  #query-bubble-label {
+    font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: var(--text-dim);
+    text-transform: uppercase; letter-spacing: .08em; margin-bottom: 6px; text-align: right;
+  }
+  #query-bubble {
+    background: var(--accent-dim); color: var(--text); border: 1px solid #c7d2fe;
+    border-radius: 14px 14px 4px 14px; padding: 10px 14px; font-size: 13px;
+    line-height: 1.6; max-width: 85%; margin-left: auto; word-break: break-word;
+  }
+  #response-section-label {
+    font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: var(--text-dim);
+    text-transform: uppercase; letter-spacing: .08em; margin-bottom: 12px;
+  }
+  #response-panel::-webkit-scrollbar { width: 5px; }
+  #response-panel::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 99px; }
+
+  #response-md h2 { font-size: 16px; font-weight: 600; color: var(--text); margin-bottom: 10px; margin-top: 20px; }
+  #response-md h2:first-child { margin-top: 0; }
+  #response-md h3 { font-size: 13px; font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: .05em; margin-top: 16px; margin-bottom: 6px; }
+  #response-md h4 { font-size: 13px; font-weight: 500; color: var(--text); margin-top: 12px; margin-bottom: 4px; }
+  #response-md p  { color: var(--text-muted); line-height: 1.65; margin-bottom: 8px; font-size: 13px; }
+  #response-md ul, #response-md ol { color: var(--text-muted); padding-left: 20px; margin-bottom: 8px; font-size: 13px; }
+  #response-md li { margin-bottom: 3px; line-height: 1.6; }
+  #response-md strong { color: var(--text); font-weight: 600; }
+
+  #notes-panel {
+    width: 380px; flex-shrink: 0; border-left: 1px solid var(--border);
+    display: flex; flex-direction: column; background: var(--surface);
+  }
+  #notes-header { padding: 12px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+  #notes-header span { font-size: 11px; font-family: 'IBM Plex Mono', monospace; color: var(--text-muted); text-transform: uppercase; letter-spacing: .08em; }
+
+  #status-row { display: flex; gap: 6px; padding: 10px 14px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  .status-btn {
+    flex: 1; padding: 5px 0; border-radius: 5px; cursor: pointer;
+    font-size: 11px; font-family: 'IBM Plex Mono', monospace; font-weight: 500;
+    border: 1px solid var(--border); background: var(--surface2); color: var(--text-muted);
+    transition: all .15s; text-align: center;
+  }
+  .status-btn:hover { border-color: var(--border2); color: var(--text); }
+  .status-btn[data-s="done"].active   { background: var(--done-bg);   border-color: var(--done);   color: var(--done); }
+  .status-btn[data-s="review"].active { background: var(--review-bg); border-color: var(--review); color: var(--review); }
+  .status-btn[data-s="flag"].active   { background: var(--flag-bg);   border-color: var(--flag);   color: var(--flag); }
+
+  /* Raw Tags — collapsed read-only section */
+  #tags-wrap { padding: 8px 14px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  #tags-toggle {
+    display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none;
+  }
+  #tags-toggle:hover { opacity: .75; }
+  #tags-section-label {
+    font-size: 10px; color: var(--text-dim); font-family: 'IBM Plex Mono', monospace;
+    text-transform: uppercase; letter-spacing: .08em;
+  }
+  #tags-summary { font-size: 10px; color: var(--text-dim); font-family: 'IBM Plex Mono', monospace; flex: 1; }
+  #tags-chevron { font-size: 10px; color: var(--text-dim); }
+  #tags-list { display: none; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+  #tags-list.open { display: flex; }
+
+  /* Tag + FM pills */
+  .tag-pill {
+    display: flex; align-items: center; gap: 4px; background: var(--accent-dim);
+    color: var(--accent); border: 1px solid #a5b4fc; border-radius: 4px;
+    padding: 2px 7px; font-size: 11px; font-family: 'IBM Plex Mono', monospace;
+  }
+  .tag-pill.readonly { cursor: default; }
+  .tag-remove { cursor: pointer; color: #818cf8; font-size: 13px; line-height: 1; }
+  .tag-remove:hover { color: var(--accent); }
+
+  /* Failure Modes section */
+  #fm-wrap { padding: 10px 14px; border-bottom: 1px solid var(--border); flex-shrink: 0; position: relative; }
+  #fm-label {
+    font-size: 10px; color: var(--text-dim); font-family: 'IBM Plex Mono', monospace;
+    text-transform: uppercase; letter-spacing: .08em; margin-bottom: 6px;
+  }
+  #fm-list { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 6px; min-height: 0; }
+  #fm-input {
+    width: 100%; background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+    padding: 4px 8px; border-radius: 5px; font-size: 12px; font-family: 'IBM Plex Mono', monospace; outline: none;
+  }
+  #fm-input::placeholder { color: var(--text-dim); }
+  #fm-input:focus { border-color: var(--accent); }
+  #fm-dropdown {
+    display: none; position: absolute; left: 14px; right: 14px;
+    background: var(--surface); border: 1px solid var(--accent);
+    border-radius: 6px; z-index: 50; max-height: 180px; overflow-y: auto;
+    box-shadow: 0 4px 12px rgba(0,0,0,.08);
+  }
+  .dropdown-item {
+    padding: 6px 10px; font-size: 12px; font-family: 'IBM Plex Mono', monospace;
+    color: var(--text-muted); cursor: pointer;
+  }
+  .dropdown-item:hover, .dropdown-item.highlighted { background: var(--accent-dim); color: var(--accent); }
+
+  #notes-body { flex: 1; padding: 12px 14px; display: flex; flex-direction: column; min-height: 0; }
+  #notes-area-label { font-size: 10px; color: var(--text-dim); font-family: 'IBM Plex Mono', monospace; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 6px; }
+  #notes-area { flex: 1; background: var(--surface2); border: 1px solid var(--border); color: var(--text); padding: 10px 12px; border-radius: 6px; font-size: 13px; font-family: 'IBM Plex Sans', sans-serif; line-height: 1.6; resize: none; outline: none; min-height: 0; }
+  #notes-area::placeholder { color: var(--text-dim); }
+  #notes-area:focus { border-color: var(--accent); }
+  #notes-area.dirty { border-color: var(--review); }
+
+  #notes-actions { display: flex; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--border); flex-shrink: 0; }
+  #save-btn { flex: 1; background: var(--accent); color: #fff; border: none; padding: 7px; border-radius: 6px; cursor: pointer; font-size: 13px; font-family: inherit; font-weight: 500; transition: opacity .15s; }
+  #save-btn:hover { opacity: .85; }
+  #save-btn:disabled { opacity: .4; cursor: default; }
+  #cancel-btn { background: var(--surface2); border: 1px solid var(--border); color: var(--text-muted); padding: 7px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; font-family: inherit; transition: all .15s; }
+  #cancel-btn:hover { border-color: var(--border2); color: var(--text); }
+  #cancel-btn:disabled { opacity: .4; cursor: default; }
+
+  #toast { position: fixed; bottom: 24px; right: 24px; background: var(--surface); border: 1px solid var(--border2); color: var(--text); padding: 10px 18px; border-radius: 8px; font-size: 13px; font-family: 'IBM Plex Mono', monospace; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 200; }
+  #toast.show    { opacity: 1; }
+  #toast.success { border-color: var(--done); color: var(--done); }
+  #toast.error   { border-color: var(--flag); color: var(--flag); }
+
+  * { scrollbar-color: var(--border2) transparent; scrollbar-width: thin; }
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <h1>EVAL VIEWER</h1>
+  <span id="filename">connecting…</span>
+  <span id="save-status" class="idle">●</span>
+  <div id="progress-wrap">
+    <span id="progress-text">0 / 0</span>
+    <div id="progress-bar-wrap"><div id="progress-bar" style="width:0%"></div></div>
+  </div>
+  <span id="shortcuts-hint">⌘S save · J ↑/K ↓ navigate · D/R/F status</span>
+</div>
+
+<div id="layout">
+  <div id="sidebar">
+    <div id="search-wrap">
+      <input id="search" placeholder="Search queries…" oninput="renderSidebar()">
+      <div id="fm-suggestions"></div>
+      <div id="active-fm-chip">
+        <span id="active-fm-label"></span>
+        <span id="clear-fm-btn" onclick="clearFailureMode()">✕</span>
+      </div>
+      <div id="sidebar-count"></div>
+    </div>
+    <div id="filter-row">
+      <div class="filter-chip active" data-f="all"    onclick="setFilter('all')">All</div>
+      <div class="filter-chip"        data-f="done"   onclick="setFilter('done')">✓ Done</div>
+      <div class="filter-chip"        data-f="review" onclick="setFilter('review')">⟳ Review</div>
+      <div class="filter-chip"        data-f="flag"   onclick="setFilter('flag')">⚑ Flagged</div>
+      <div class="filter-chip"        data-f="none"   onclick="setFilter('none')">○ Uncoded</div>
+    </div>
+    <div id="sidebar-list"></div>
+  </div>
+
+  <div id="main">
+    <div id="loading-state">
+      <div class="icon">◌</div>
+      <p>Loading from server…</p>
+    </div>
+    <div id="empty-state" style="display:none">
+      <div class="icon">◈</div>
+      <p>Could not reach the server</p>
+      <div class="hint">Run: python3 server.py your_results.json</div>
+    </div>
+    <div id="entry-view">
+      <div id="entry-nav">
+        <span id="entry-id"></span>
+        <button id="nav-prev" onclick="navigate(-1)">Prev</button>
+        <span id="nav-counter"></span>
+        <button id="nav-next" onclick="navigate(1)">Next</button>
+      </div>
+      <div id="content-split">
+        <div id="response-panel">
+          <div id="query-section">
+            <!-- <div id="query-bubble-label">Query</div> -->
+            <div id="query-bubble"></div>
+          </div>
+          <!-- <div id="response-section-label">Response</div> -->
+          <div id="response-md"></div>
+          <button id="copy-btn" onclick="copyResponse()">⎘ Copy</button>
+        </div>
+        <div id="notes-panel">
+          <div id="notes-header">
+            <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+            <span>Open Coding</span>
+          </div>
+          <div id="status-row">
+            <div class="status-btn" data-s="done"   onclick="setStatus('done')">✓ Done</div>
+            <div class="status-btn" data-s="review" onclick="setStatus('review')">⟳ Review</div>
+            <div class="status-btn" data-s="flag"   onclick="setStatus('flag')">⚑ Flag</div>
+          </div>
+
+          <!-- Raw Tags — collapsed, read-only -->
+          <div id="tags-wrap">
+            <div id="tags-toggle" onclick="toggleRawTags()">
+              <span id="tags-section-label">Raw Tags</span>
+              <span id="tags-summary"></span>
+              <span id="tags-chevron">▸</span>
+            </div>
+            <div id="tags-list"></div>
+          </div>
+
+          <!-- Failure Modes — editable combobox -->
+          <div id="fm-wrap">
+            <div id="fm-label">Failure Modes</div>
+            <div id="fm-list"></div>
+            <input id="fm-input" placeholder="add or select failure mode…"
+                   oninput="onFmInput()" onfocus="onFmFocus()"
+                   onkeydown="fmKeydown(event)"
+                   onblur="setTimeout(hideFmDropdown, 150)">
+            <div id="fm-dropdown"></div>
+          </div>
+
+          <div id="notes-body">
+            <div id="notes-area-label">Notes</div>
+            <textarea id="notes-area" placeholder="Start typing open coding notes…" oninput="markDirty()"></textarea>
+          </div>
+          <div id="notes-actions">
+            <button id="save-btn" onclick="saveEntry()" disabled>Save</button>
+            <button id="cancel-btn" onclick="cancelEdit()" disabled>Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+let data = [], currentIdx = -1, dirty = false, filterActive = 'all';
+let workStatus = null, workTags = [], workFailureModes = [];
+let knownCodes = new Set();
+let knownFailureModes = new Set(), fmDropdownHighlight = -1;
+let activeFailureMode = null;
+let tagsExpanded = false;
+
+// ── BOOT ──────────────────────────────────────────────────────────────────
+async function boot() {
+  try {
+    const res = await fetch('/api/data');
+    if (!res.ok) throw new Error();
+    const json = await res.json();
+    if (!json.ok) throw new Error(json.error);
+    data = json.data;
+    const stored = JSON.parse(localStorage.getItem('evalViewer_knownCodes') || '[]');
+    stored.forEach(c => knownCodes.add(c));
+    data.forEach(d => {
+      (d._tags || []).forEach(t => knownCodes.add(t));
+      (d._failure_modes || []).forEach(fm => knownFailureModes.add(fm));
+    });
+    localStorage.setItem('evalViewer_knownCodes', JSON.stringify([...knownCodes]));
+    document.getElementById('filename').textContent = json.filename;
+    document.getElementById('loading-state').style.display = 'none';
+    renderSidebar(); updateProgress();
+    if (data.length > 0) selectEntry(0);
+  } catch {
+    document.getElementById('loading-state').style.display = 'none';
+    document.getElementById('empty-state').style.display = 'flex';
+  }
+}
+
+// ── SAVE ──────────────────────────────────────────────────────────────────
+async function saveEntry() {
+  if (currentIdx < 0) return;
+  const d = data[currentIdx];
+  d._status        = workStatus;
+  d._tags          = [...workTags];
+  d._notes         = document.getElementById('notes-area').value;
+  d._failure_modes = [...workFailureModes];
+
+  setSaveStatus('saving');
+  try {
+    const res = await fetch('/api/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data, id: d.id })
+    });
+    const json = await res.json();
+    if (!json.ok) throw new Error(json.error);
+    setDirty(false); updateProgress(); renderSidebar();
+    setSaveStatus('saved');
+    showToast('Saved to disk ✓', 'success');
+  } catch (e) {
+    setSaveStatus('error');
+    showToast('Save failed', 'error');
+  }
+}
+
+function setSaveStatus(state) {
+  const el = document.getElementById('save-status');
+  el.className = state;
+  el.textContent = { idle:'●', saving:'⟳ saving…', saved:'✓ saved', error:'✗ error' }[state] || '●';
+  if (state === 'saved') setTimeout(() => setSaveStatus('idle'), 2500);
+}
+
+// ── SELECT ────────────────────────────────────────────────────────────────
+function selectEntry(idx) {
+  if (dirty && !confirm('Unsaved changes — discard?')) return;
+  currentIdx = idx;
+  const d = data[idx];
+  workStatus       = d._status || null;
+  workTags         = [...(d._tags || [])];
+  workFailureModes = [...(d._failure_modes || [])];
+
+  document.getElementById('loading-state').style.display = 'none';
+  document.getElementById('empty-state').style.display = 'none';
+  document.getElementById('entry-view').style.display = 'flex';
+
+  document.getElementById('entry-id').textContent     = `#${d.id}`;
+  document.getElementById('query-bubble').textContent = d.query;
+  document.getElementById('nav-counter').textContent  = `${idx + 1} / ${data.length}`;
+  document.getElementById('response-md').innerHTML    = renderMarkdown(d.response);
+
+  document.querySelectorAll('.status-btn').forEach(b => b.classList.toggle('active', b.dataset.s === workStatus));
+  renderTags();
+  renderFailureModes();
+  const ta = document.getElementById('notes-area');
+  ta.value = d._notes || '';
+  ta.classList.remove('dirty');
+  setDirty(false);
+  renderSidebar();
+}
+
+// ── STATUS ────────────────────────────────────────────────────────────────
+function setStatus(s) {
+  workStatus = workStatus === s ? null : s;
+  document.querySelectorAll('.status-btn').forEach(b => b.classList.toggle('active', b.dataset.s === workStatus));
+  setDirty(true);
+}
+
+// ── RAW TAGS (read-only, collapsed) ───────────────────────────────────────
+function renderTags() {
+  const count = workTags.length;
+  document.getElementById('tags-summary').textContent = count
+    ? `— ${count} tag${count !== 1 ? 's' : ''}`
+    : '— none';
+  document.getElementById('tags-list').innerHTML = workTags
+    .map(t => `<div class="tag-pill readonly">${escHtml(t)}</div>`)
+    .join('');
+}
+function toggleRawTags() {
+  tagsExpanded = !tagsExpanded;
+  document.getElementById('tags-list').classList.toggle('open', tagsExpanded);
+  document.getElementById('tags-chevron').textContent = tagsExpanded ? '▾' : '▸';
+}
+
+// ── FAILURE MODES ─────────────────────────────────────────────────────────
+function renderFailureModes() {
+  document.getElementById('fm-list').innerHTML = workFailureModes.map((fm, i) =>
+    `<div class="tag-pill">${escHtml(fm)}<span class="tag-remove" onclick="removeFailureMode(${i})">×</span></div>`
+  ).join('');
+}
+function addFailureMode(val) {
+  const norm = val.trim();
+  if (!norm) return;
+  const lower = norm.toLowerCase();
+  if (workFailureModes.some(fm => fm.toLowerCase() === lower)) {
+    hideFmDropdown();
+    document.getElementById('fm-input').value = '';
+    return;
+  }
+  // preserve casing of an existing known FM if one matches
+  const existing = [...knownFailureModes].find(fm => fm.toLowerCase() === lower);
+  const toAdd = existing || norm;
+  workFailureModes.push(toAdd);
+  knownFailureModes.add(toAdd);
+  renderFailureModes();
+  setDirty(true);
+  hideFmDropdown();
+  document.getElementById('fm-input').value = '';
+}
+function removeFailureMode(i) {
+  workFailureModes.splice(i, 1);
+  renderFailureModes();
+  setDirty(true);
+}
+function onFmFocus() {
+  const val = document.getElementById('fm-input').value.trim().toLowerCase();
+  const matches = [...knownFailureModes]
+    .filter(fm => !workFailureModes.some(w => w.toLowerCase() === fm.toLowerCase()))
+    .filter(fm => !val || fm.toLowerCase().includes(val))
+    .slice(0, 20);
+  showFmDropdown(matches);
+}
+function onFmInput() { onFmFocus(); }
+function showFmDropdown(items) {
+  const dd = document.getElementById('fm-dropdown');
+  if (!items.length) { hideFmDropdown(); return; }
+  fmDropdownHighlight = -1;
+  dd.innerHTML = items.map(fm =>
+    `<div class="dropdown-item" data-val="${escHtml(fm)}" onmousedown="selectFmItem(this.dataset.val)">${escHtml(fm)}</div>`
+  ).join('');
+  dd.style.display = 'block';
+}
+function hideFmDropdown() {
+  const dd = document.getElementById('fm-dropdown');
+  dd.style.display = 'none';
+  dd.innerHTML = '';
+  fmDropdownHighlight = -1;
+}
+function selectFmItem(val) { addFailureMode(val); }
+function updateFmDropdownHighlight() {
+  document.querySelectorAll('#fm-dropdown .dropdown-item').forEach((el, i) =>
+    el.classList.toggle('highlighted', i === fmDropdownHighlight)
+  );
+}
+function fmKeydown(e) {
+  const items = document.querySelectorAll('#fm-dropdown .dropdown-item');
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    if (fmDropdownHighlight >= 0 && items[fmDropdownHighlight]) {
+      selectFmItem(items[fmDropdownHighlight].dataset.val);
+    } else {
+      const val = document.getElementById('fm-input').value.trim();
+      if (val) addFailureMode(val);
+    }
+  } else if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    fmDropdownHighlight = Math.min(fmDropdownHighlight + 1, items.length - 1);
+    updateFmDropdownHighlight();
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    fmDropdownHighlight = Math.max(fmDropdownHighlight - 1, -1);
+    updateFmDropdownHighlight();
+  } else if (e.key === 'Escape') {
+    hideFmDropdown();
+  }
+}
+
+// ── DIRTY / CANCEL ────────────────────────────────────────────────────────
+function markDirty() { setDirty(true); }
+function setDirty(val) {
+  dirty = val;
+  document.getElementById('notes-area').classList.toggle('dirty', val);
+  document.getElementById('save-btn').disabled   = !val;
+  document.getElementById('cancel-btn').disabled = !val;
+}
+function cancelEdit() {
+  if (currentIdx < 0) return;
+  const d = data[currentIdx];
+  workStatus       = d._status || null;
+  workTags         = [...(d._tags || [])];
+  workFailureModes = [...(d._failure_modes || [])];
+  document.querySelectorAll('.status-btn').forEach(b => b.classList.toggle('active', b.dataset.s === workStatus));
+  renderTags();
+  renderFailureModes();
+  document.getElementById('notes-area').value = d._notes || '';
+  setDirty(false);
+}
+
+// ── SIDEBAR ───────────────────────────────────────────────────────────────
+function renderFmSuggestions(q) {
+  const container = document.getElementById('fm-suggestions');
+  if (activeFailureMode || !q) {
+    container.innerHTML = '';
+    container.style.display = 'none';
+    return;
+  }
+  const matches = [...knownFailureModes].filter(fm => fm.toLowerCase().includes(q));
+  if (!matches.length) {
+    container.innerHTML = '';
+    container.style.display = 'none';
+    return;
+  }
+  const suggestions = matches.map(fm => {
+    const count = data.filter(d => {
+      const mf = filterActive === 'all' || (filterActive === 'none' && !d._status) || d._status === filterActive;
+      return mf && (d._failure_modes || []).some(f => f.toLowerCase() === fm.toLowerCase());
+    }).length;
+    return { fm, count };
+  }).filter(s => s.count > 0);
+
+  if (!suggestions.length) {
+    container.innerHTML = '';
+    container.style.display = 'none';
+    return;
+  }
+  container.innerHTML =
+    `<div id="fm-suggestions-label">Failure modes</div>` +
+    suggestions.map(({ fm, count }) =>
+      `<div class="fm-suggestion" data-fm="${escHtml(fm)}" onclick="lockFailureMode(this.dataset.fm)">${escHtml(fm)} <span class="fm-count">(${count})</span></div>`
+    ).join('');
+  container.style.display = 'block';
+}
+function lockFailureMode(fm) {
+  activeFailureMode = fm;
+  document.getElementById('search').value = '';
+  document.getElementById('fm-suggestions').style.display = 'none';
+  document.getElementById('fm-suggestions').innerHTML = '';
+  document.getElementById('active-fm-label').textContent = fm;
+  document.getElementById('active-fm-chip').style.display = 'flex';
+  renderSidebar();
+}
+function clearFailureMode() {
+  activeFailureMode = null;
+  document.getElementById('active-fm-chip').style.display = 'none';
+  renderSidebar();
+}
+
+function renderSidebar() {
+  const q = document.getElementById('search').value.toLowerCase();
+  const list = document.getElementById('sidebar-list');
+  list.innerHTML = '';
+
+  renderFmSuggestions(q);
+
+  const filtered = data.map((d, i) => ({ d, i })).filter(({ d }) => {
+    const mq  = !q || d.query.toLowerCase().includes(q);
+    const mf  = filterActive === 'all' || (filterActive === 'none' && !d._status) || d._status === filterActive;
+    const mfm = !activeFailureMode || (d._failure_modes || []).some(fm => fm.toLowerCase() === activeFailureMode.toLowerCase());
+    return mq && mf && mfm;
+  });
+
+  document.getElementById('sidebar-count').textContent = `${filtered.length} / ${data.length}`;
+
+  filtered.forEach(({ d, i }) => {
+    const el = document.createElement('div');
+    el.className = `sidebar-item s-${d._status || 'none'}${i === currentIdx ? ' active' : ''}`;
+    el.innerHTML = `<div class="status-bar"></div><div class="item-inner"><div class="item-id">#${d.id}</div><div class="item-query">${escHtml(d.query)}</div></div>`;
+    el.addEventListener('click', () => selectEntry(i));
+    list.appendChild(el);
+  });
+
+  const active = list.querySelector('.sidebar-item.active');
+  if (active) active.scrollIntoView({ block: 'nearest' });
+}
+function setFilter(f) {
+  filterActive = f;
+  document.querySelectorAll('.filter-chip').forEach(c => c.classList.toggle('active', c.dataset.f === f));
+  renderSidebar();
+}
+
+// ── PROGRESS ──────────────────────────────────────────────────────────────
+function updateProgress() {
+  const coded = data.filter(d => d._status).length;
+  document.getElementById('progress-text').textContent = `${coded} / ${data.length}`;
+  document.getElementById('progress-bar').style.width  = data.length ? `${coded / data.length * 100}%` : '0%';
+}
+
+// ── NAVIGATE ──────────────────────────────────────────────────────────────
+function navigate(dir) { const n = currentIdx + dir; if (n >= 0 && n < data.length) selectEntry(n); }
+
+// ── KEYBOARD ──────────────────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  const typing = ['TEXTAREA', 'INPUT'].includes(document.activeElement.tagName);
+  if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); if (dirty) saveEntry(); return; }
+  if (!typing) {
+    if (e.key === 'k' || e.key === 'ArrowDown') { e.preventDefault(); navigate(1); }
+    if (e.key === 'j' || e.key === 'ArrowUp')   { e.preventDefault(); navigate(-1); }
+    if (e.key === 'd') setStatus('done');
+    if (e.key === 'r') setStatus('review');
+    if (e.key === 'f') setStatus('flag');
+  }
+});
+
+// ── TOAST ─────────────────────────────────────────────────────────────────
+let toastTimer;
+function showToast(msg, type = '') {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.className = `show ${type}`;
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.className = '', 2200);
+}
+
+// ── COPY ──────────────────────────────────────────────────────────────────
+function copyResponse() {
+  if (currentIdx < 0) return;
+  navigator.clipboard.writeText(data[currentIdx].response || '').then(() => {
+    const btn = document.getElementById('copy-btn');
+    btn.textContent = '✓ Copied'; btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = '⎘ Copy'; btn.classList.remove('copied'); }, 2000);
+  }).catch(() => showToast('Copy failed', 'error'));
+}
+
+// ── MARKDOWN ──────────────────────────────────────────────────────────────
+function renderMarkdown(md) {
+  if (!md) return '';
+  let h = escHtml(md);
+  h = h.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  h = h.replace(/^## (.+)$/gm,  '<h2>$1</h2>');
+  h = h.replace(/^#### (.+)$/gm,'<h4>$1</h4>');
+  h = h.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  h = h.replace(/((?:^[*\-] .+\n?)+)/gm, m => `<ul>${m.trim().split('\n').map(l => `<li>${l.replace(/^[*\-] /, '')}</li>`).join('')}</ul>`);
+  h = h.replace(/((?:^\d+\. .+\n?)+)/gm, m => `<ol>${m.trim().split('\n').map(l => `<li>${l.replace(/^\d+\. /, '')}</li>`).join('')}</ol>`);
+  h = '<p>' + h.replace(/\n\n+/g, '</p><p>') + '</p>';
+  h = h.replace(/(?<!>)\n(?!<)/g, '<br>');
+  h = h.replace(/<p>\s*<\/p>/g, '');
+  h = h.replace(/<p>(<h[234]>)/g, '$1').replace(/(<\/h[234]>)<\/p>/g, '$1');
+  h = h.replace(/<p>(<[uo]l>)/g, '$1').replace(/(<\/[uo]l>)<\/p>/g, '$1');
+  return h;
+}
+function escHtml(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+boot();
+</script>
+</body>
+</html>
