@@ -29,9 +29,9 @@ from backend.utils import get_agent_response
 # Configuration
 # -----------------------------------------------------------------------------
 
-DEFAULT_CSV: Path = Path("data/sample_queries.csv")
+DEFAULT_CSV: Path = Path("data/sample_queries_calude.csv")
 RESULTS_DIR: Path = Path("results")
-MAX_WORKERS = 32
+MAX_WORKERS = 5
 
 
 # -----------------------------------------------------------------------------
@@ -40,12 +40,17 @@ MAX_WORKERS = 32
 
 def read_queries(csv_path: Path) -> list[dict[str, str]]:
     """Read queries from CSV (expects 'id' and 'query' columns)."""
-    import csv
-    
-    with csv_path.open("r", newline="", encoding="utf-8") as csv_file:
-        reader = csv.DictReader(csv_file)
-        queries = [row for row in reader if row.get("id") and row.get("query")]
-    
+    queries = []
+    with csv_path.open("r", encoding="utf-8") as csv_file:
+        for i, line in enumerate(csv_file):
+            line = line.strip()
+            if i == 0 or not line:  # skip header row
+                continue
+            first_comma = line.index(",")
+            query_id = line[:first_comma]
+            query = line[first_comma + 1:]
+            if query_id and query:
+                queries.append({"id": query_id, "query": query})
     return queries
 
 
@@ -104,14 +109,15 @@ def run_bulk_test(csv_path: Path, num_workers: int = MAX_WORKERS) -> None:
     console = Console()
     
     queries = read_queries(csv_path)
-    actual_workers = min(num_workers, len(queries))
+    num_queries_to_process = 100
+    actual_workers = min(num_workers, len(queries[:num_queries_to_process]))
     
-    console.print(f"[bold blue]Processing {len(queries)} queries with {actual_workers} workers...[/bold blue]")
+    console.print(f"[bold blue]Processing {len(queries[:num_queries_to_process])} queries with {actual_workers} workers...[/bold blue]")
     
     with ThreadPoolExecutor(max_workers=actual_workers) as executor:
         results = list(executor.map(
             lambda item: process_query(item["id"], item["query"]),
-            queries
+            queries[:num_queries_to_process]
         ))
     
     for i, (query_id, query, response) in enumerate(results):
